@@ -1,0 +1,130 @@
+---
+title: "Test"
+output:
+  html_document: default
+  pdf_document: default
+date: "2024-02-23"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Packages
+```{r}
+library(sf)
+library(ggplot2)
+library(sp)
+library(raster)
+library(ggmap)
+library(adehabitatLT)
+library(adehabitatMA)
+library(adehabitatHR)
+```
+
+
+## Exercice de lecture de donnees dans R
+
+```{r}
+data <- readRDS("example_SKUA_dataset.rds")
+```
+
+Les donnees sont de type tableau, avec 6 colonnes:  
+- Timestamp qui nous donne la date et l'heure  
+- Nest qui donne le numero/l'ID du nest auquel appartient l'oiseau  
+-Ring qui est l'ID de l'oiseau  
+- trackID sous la forme "ring_date" : ca donne l'enregistrement en question  
+- lon et lat les latitudes et longitudes en degres
+
+
+Je spatialise les donnees en utilisant le code EPSCG pour les latitudes/longitudes
+```{r}
+datUTM <- st_as_sf(data, coords=c("lon","lat"), crs= 4326) # EPSCG code for Latitudes/Longitudes
+```
+
+Ensuite on projette les donnees pour les avoir en m, selon le systeme de reference UTM, WGS84 ellipsoid, South Pole, a l'aide de la fonction st_transform.  
+J'ai trouve le code EPSCG 32761, Arnaud utilise le 3227 (plus precis)
+
+```{r}
+d <- st_transform(datUTM, crs= 3227)
+```
+
+
+Plotter:
+
+```{r}
+ggplot()+
+  geom_sf(data=d$geometry, mapping= aes(color = d$timestamp))
+```
+Essayer de faire une Kernel density sur le jeu de donnees qu'on a 
+
+```{r}
+
+de = MASS::kde2d(xy[,1], xy[,2])
+image(de)
+```
+
+
+## Test du package adehabitatHR et de la Brownian bridge Kernel method
+
+Recuperer les coordonnees X, Y:
+```{r}
+d <- as.data.frame(d)
+xy = st_coordinates(d$geometry)
+xy <- as.data.frame(xy)
+d$X <- xy$X
+d$Y <- xy$Y
+```
+
+
+Convertir l'objet en objet de classe as.ltraj (cf vignette du package adehabitatHR)
+```{r}
+#da <- as.POSIXct(strptime(as.character(d$timestamp),"%y%m%d", tz="Europe/Paris"))
+trajtest <- as.ltraj(xy = d[,c("X","Y")], date = d$timestamp, id = d$ring)
+```
+
+Evaluation des parametres sig2 (standard deviation des positions), et de sig1 (par maximum likelihood)
+```{r}
+sig2 <- 0.5*sqrt(sd(d$X)+ sd(d$Y))  # revoir ce calcul de sigma 2
+lik <- liker(trajtest, sig2 = sig2, rangesig1 = c(0, 10))
+plot(lik$testbird$cv)
+```
+
+Implementation des Brownian bridges avec sig1 et sig2
+
+```{r}
+#tata <- kernelbb(trajtest, sig1 = 0.7107, sig2 = sig2, grid = 80)
+image(tata)
+plot(getverticeshr(tata, 50), add=TRUE, lwd=2)
+```
+
+Recuperer les home range!  
+En vectoriel:
+```{r}
+g <- getverticeshr(tata, 50) # donne le home range a x% sous forme vector
+plot(g,col=1)
+```
+
+Petit souci au niveau des unites: il me semble qu'il y a un facteur 100 en moins au niveau des aires de home range.  
+
+
+
+Home range en raster mode: bien pour calculer le home range car valeurs des probas sur chaque ligne.
+```{r}
+vud <- getvolumeUD(tata)
+image(vud[1])
+xyzv <- as.image.SpatialGridDataFrame(vud[1])
+contour(xyzv, add=TRUE)
+```
+
+Taille des home range? Si on a utilise la fonction "getverticeshr", alors on a la colonne "area" dans le SpatialPolygonsDataFrame qu'elle renvoie, pour la proba definie avant (mesure de l'aire definie par le polygone). Sinon directement avec l'objet estUD obtenu via kernel ou Brownian bridges: (mesure l'aire correspondant aux cellules de la grille dans le home range, vision raster)
+
+```{r}
+ii <- kernel.area(tata, percent=seq(50, 95, by=5))
+ii <- as.data.frame(ii)
+plot(as.numeric(rownames(ii)), ii[,1])
+```
+
+
+
+
